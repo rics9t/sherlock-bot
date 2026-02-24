@@ -39,7 +39,6 @@ from sherlock_project.notify import QueryNotify
 BOT_TOKEN = os.environ.get("SHERLOCK_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 # Comma-separated list of allowed Telegram user IDs
-# Example: "123456789,987654321"
 ALLOWED_USER_IDS_RAW = os.environ.get("ALLOWED_USER_IDS", "")
 ALLOWED_USER_IDS: set[int] = set()
 
@@ -69,27 +68,29 @@ logger = logging.getLogger(__name__)
 
 def is_user_allowed(user_id: int) -> bool:
     """Check if a user is allowed to use the bot."""
-    # If no allowed users configured, deny everyone (secure by default)
     if not ALLOWED_USER_IDS:
-        logger.warning(
-            f"ALLOWED_USER_IDS is empty. Denying user {user_id}. "
-            f"Set the environment variable to allow access."
-        )
         return False
     return user_id in ALLOWED_USER_IDS
 
 
 async def check_access(update: Update) -> bool:
-    """Check user access and send denial message if unauthorized."""
-    user_id = update.effective_user.id
-    username = update.effective_user.username or "unknown"
+    """
+    Check user access and send denial message if unauthorized.
+    Returns False and sends a message if denied.
+    """
+    user = update.effective_user
+    if not user:
+        return False
+
+    user_id = user.id
+    username = user.username or "unknown"
 
     if not is_user_allowed(user_id):
-        logger.warning(f"Unauthorized access attempt by user {user_id} (@{username})")
+        logger.warning(f"Unauthorized access attempt: {user_id} (@{username})")
         await update.message.reply_text(
             "🚫 <b>Access Denied</b>\n\n"
-            f"Your user ID <code>{user_id}</code> is not authorized to use this bot.\n\n"
-            "Contact the bot administrator to request access.",
+            "You are not authorized to use this bot.\n\n"
+            f"Your user ID: <code>{user_id}</code>",
             parse_mode=ParseMode.HTML,
         )
         return False
@@ -191,29 +192,43 @@ def split_message(text: str, max_length: int = 4096) -> list[str]:
     return chunks
 
 
-async def run_sherlock_search(username: str, site_list: list[str] | None = None):
+def get_sherlock_sites() -> dict:
+    """
+    Get Sherlock sites data - handles different versions of the API.
+    """
+    sites_info = SitesInformation()
+
+    # Try different attribute names based on sherlock version
+    if hasattr(sites_info, 'sites'):
+        return sites_info.sites
+    elif hasattr(sites_info, 'site_data'):
+        return sites_info.site_data
+    elif hasattr(sites_info, 'data'):
+        return sites_info.data
+    else:
+        # Fallback: iterate the object itself if it's dict-like
+        if hasattr(sites_info, '__iter__'):
+            return dict(sites_info)
+        # Last resort: check what attributes exist
+        attrs = [a for a in dir(sites_info) if not a.startswith('_')]
+        logger.error(f"SitesInformation has attributes: {attrs}")
+        raise AttributeError(
+            f"Cannot find sites data. Available attributes: {attrs}"
+        )
+
+
+async def run_sherlock_search(username: str):
     """Run Sherlock search in a thread pool to avoid blocking."""
     def _search():
         notifier = TelegramQueryNotify()
-        sites = SitesInformation(
-            SitesInformation(data_file_path=None).site_data
-        )
 
-        site_data = sites.site_data
+        # Get sites data
+        site_data = get_sherlock_sites()
 
-        if site_list:
-            site_data = {
-                k: v for k, v in site_data.items()
-                if k.lower() in [s.lower() for s in site_list]
-            }
-            if not site_data:
-                site_data = sites.site_data
-
-        sites_info = SitesInformation(site_data)
-
+        # Run the actual search
         results = sherlock_search(
             username=username,
-            site_data=sites_info.site_data,
+            site_data=site_data,
             query_notify=notifier,
             tor=False,
             unique_tor=False,
@@ -272,7 +287,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /search <code>&lt;username&gt;</code> — Search for a username\n"
         "  /multi <code>&lt;user1 user2 ...&gt;</code> — Search multiple usernames\n"
         "  /sites — List available sites\n"
-        "  /myid — Show your Telegram user ID\n"
         "  /help — Show help information\n"
         "  /about — About this bot\n\n"
         "Or simply <b>send me a username</b> and I'll search for it!\n\n"
@@ -313,8 +327,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   Example: <code>/multi alice bob charlie</code>\n\n"
         "🔹 <code>/sites</code>\n"
         "   Show the number of supported sites.\n\n"
-        "🔹 <code>/myid</code>\n"
-        "   Show your Telegram user ID.\n\n"
         "🔹 <code>/cancel</code>\n"
         "   Cancel current operation.\n\n"
         "<b>Tips:</b>\n"
@@ -345,28 +357,15 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /myid command — show user their Telegram ID."""
-    user = update.effective_user
-    await update.message.reply_text(
-        f"🆔 <b>Your Telegram Info:</b>\n\n"
-        f"  User ID: <code>{user.id}</code>\n"
-        f"  Username: @{user.username or 'N/A'}\n"
-        f"  Name: {user.full_name}\n\n"
-        f"{'✅ You are authorized.' if is_user_allowed(user.id) else '🚫 You are NOT authorized.'}",
-        parse_mode=ParseMode.HTML,
-    )
-
-
 async def sites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /sites command."""
     if not await check_access(update):
         return
 
     try:
-        sites = SitesInformation(data_file_path=None)
-        site_count = len(sites.site_data)
-        site_names = sorted(sites.site_data.keys())
+        site_data = get_sherlock_sites()
+        site_count = len(site_data)
+        site_names = sorted(site_data.keys())
 
         popular = site_names[:30]
         message = (
@@ -381,7 +380,7 @@ async def sites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error loading sites: {e}")
         await update.message.reply_text(
-            "❌ Error loading site information. Please try again later."
+            f"❌ Error loading site information: {str(e)}"
         )
 
 
@@ -549,7 +548,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = query.from_user.id
     if not is_user_allowed(user_id):
-        await query.message.reply_text("🚫 Access denied.")
+        await query.message.reply_text(
+            "🚫 <b>Access Denied</b>\n\nYou are not authorized to use this bot.",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     if query.data == "prompt_search":
@@ -567,8 +569,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /cancel command."""
+    if not await check_access(update):
+        return
+
     await update.message.reply_text(
         "🛑 Operation cancelled.\n\nSend /start to begin again."
+    )
+
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle unknown commands - also requires auth."""
+    if not await check_access(update):
+        return
+
+    await update.message.reply_text(
+        "❓ Unknown command. Use /help to see available commands."
     )
 
 
@@ -622,7 +637,6 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("about", about_command))
-    application.add_handler(CommandHandler("myid", myid_command))
     application.add_handler(CommandHandler("sites", sites_command))
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("multi", multi_search_command))
@@ -631,15 +645,17 @@ def main():
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)
     )
+    # Catch unknown commands
+    application.add_handler(
+        MessageHandler(filters.COMMAND, unknown_command)
+    )
     application.add_error_handler(error_handler)
 
     print("✅ Bot is running! Press Ctrl+C to stop.")
 
-    # ─── FIX for Python 3.14+ (no auto event loop) ───────────────────────
+    # FIX for Python 3.10+ / 3.14+ (no auto event loop creation)
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

@@ -5,6 +5,19 @@ lib/
 pyvenv.cfg
 poetry.lock
 
+# images and gifs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+
+# temps and cache 
+*.swp
+__pycache__/
+.DS_Store
+
 # Regression Testing
 .coverage
 .tox/

@@ -9,23 +9,15 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          lfs: true
       - name: Push to HF
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # 1. Удаляем все проблемные файлы физически
-          rm -rf docs/images/ images/ screenshot/
-          find . -name "*.png" -type f -delete
-          find . -name "*.gif" -type f -delete
-          find . -name "*.swp" -type f -delete
-          
-          # 2. Фиксируем изменения локально (внутри виртуальной машины Action)
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add .
-          git commit -m "Cleanup binary files for HF Space" || echo "No changes to commit"
-          
-          # 3. Пушим чистый код в ветку main на HF
+          git config --global user.email "actions@github.com"
+          git config --global user.name "Github Actions"
+          # Удаляем все картинки из индекса, чтобы HF не ругался
+          git filter-branch --force --index-filter \
+          "git rm --cached --ignore-unmatch -r docs/images/ images/ screenshot/ *.png *.gif *.swp" \
+          --prune-empty --tag-name-filter cat -- --all
+          # Пушим в Space
           git push --force https://Rics9t:$HF_TOKEN@huggingface.co/spaces/Rics9t/Sherlock master:main
-

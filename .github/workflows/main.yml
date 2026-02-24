@@ -13,4 +13,4 @@ jobs:
       - name: Push to HF
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://Rics9t:$HF_TOKEN@huggingface.co/spaces/Rics9t/Sherlock master
+        run: git push --force https://Rics9t:$HF_TOKEN@huggingface.co/spaces/Rics9t/Sherlock master:main

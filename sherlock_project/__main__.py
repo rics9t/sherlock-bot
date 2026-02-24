@@ -8,6 +8,8 @@ import sys
 import os
 import asyncio
 import logging
+import json
+import requests
 from datetime import datetime
 
 if sys.version_info < (3, 9):
@@ -30,7 +32,6 @@ from telegram.ext import (
 from telegram.constants import ParseMode, ChatAction
 
 from sherlock_project.sherlock import sherlock as sherlock_search
-from sherlock_project.sites import SitesInformation
 from sherlock_project.result import QueryStatus
 from sherlock_project.notify import QueryNotify
 
@@ -38,7 +39,6 @@ from sherlock_project.notify import QueryNotify
 
 BOT_TOKEN = os.environ.get("SHERLOCK_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
-# Comma-separated list of allowed Telegram user IDs
 ALLOWED_USER_IDS_RAW = os.environ.get("ALLOWED_USER_IDS", "")
 ALLOWED_USER_IDS: set[int] = set()
 
@@ -55,6 +55,9 @@ if ALLOWED_USER_IDS_RAW.strip():
 
 MAX_USERNAMES_PER_REQUEST = int(os.environ.get("MAX_USERNAMES", "5"))
 MAX_USERNAME_LENGTH = int(os.environ.get("MAX_USERNAME_LENGTH", "64"))
+
+# Sherlock data URL
+MANIFEST_URL = "https://raw.githubusercontent.com/sherlock-project/sherlock/master/sherlock_project/resources/data.json"
 
 # Logging
 logging.basicConfig(
@@ -74,10 +77,7 @@ def is_user_allowed(user_id: int) -> bool:
 
 
 async def check_access(update: Update) -> bool:
-    """
-    Check user access and send denial message if unauthorized.
-    Returns False and sends a message if denied.
-    """
+    """Check user access and send denial message if unauthorized."""
     user = update.effective_user
     if not user:
         return False
@@ -194,27 +194,21 @@ def split_message(text: str, max_length: int = 4096) -> list[str]:
 
 def get_sherlock_sites() -> dict:
     """
-    Get Sherlock sites data - handles different versions of the API.
+    Get Sherlock sites data as raw dict (what sherlock() function expects).
+    Downloads fresh data from GitHub.
     """
-    sites_info = SitesInformation()
-
-    # Try different attribute names based on sherlock version
-    if hasattr(sites_info, 'sites'):
-        return sites_info.sites
-    elif hasattr(sites_info, 'site_data'):
-        return sites_info.site_data
-    elif hasattr(sites_info, 'data'):
-        return sites_info.data
-    else:
-        # Fallback: iterate the object itself if it's dict-like
-        if hasattr(sites_info, '__iter__'):
-            return dict(sites_info)
-        # Last resort: check what attributes exist
-        attrs = [a for a in dir(sites_info) if not a.startswith('_')]
-        logger.error(f"SitesInformation has attributes: {attrs}")
-        raise AttributeError(
-            f"Cannot find sites data. Available attributes: {attrs}"
-        )
+    try:
+        response = requests.get(url=MANIFEST_URL, timeout=30)
+        if response.status_code == 200:
+            site_data = response.json()
+            site_data.pop('$schema', None)
+            logger.info(f"Loaded {len(site_data)} sites from manifest")
+            return site_data
+        else:
+            raise RuntimeError(f"HTTP {response.status_code} from manifest URL")
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch sites from URL: {e}")
+        raise RuntimeError(f"Could not load Sherlock sites data: {e}")
 
 
 async def run_sherlock_search(username: str):
@@ -222,10 +216,10 @@ async def run_sherlock_search(username: str):
     def _search():
         notifier = TelegramQueryNotify()
 
-        # Get sites data
+        # Get raw site data (dict of dicts)
         site_data = get_sherlock_sites()
 
-        # Run the actual search
+        # Run the search
         results = sherlock_search(
             username=username,
             site_data=site_data,
@@ -578,7 +572,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle unknown commands - also requires auth."""
+    """Handle unknown commands."""
     if not await check_access(update):
         return
 
@@ -645,7 +639,6 @@ def main():
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message)
     )
-    # Catch unknown commands
     application.add_handler(
         MessageHandler(filters.COMMAND, unknown_command)
     )
@@ -655,7 +648,7 @@ def main():
 
     # FIX for Python 3.10+ / 3.14+ (no auto event loop creation)
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

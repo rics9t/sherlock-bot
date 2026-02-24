@@ -8,8 +8,6 @@ import sys
 import os
 import asyncio
 import logging
-import json
-import requests
 from datetime import datetime
 
 if sys.version_info < (3, 9):
@@ -32,6 +30,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode, ChatAction
 
 from sherlock_project.sherlock import sherlock as sherlock_search
+from sherlock_project.sites import SitesInformation
 from sherlock_project.result import QueryStatus
 from sherlock_project.notify import QueryNotify
 
@@ -55,9 +54,6 @@ if ALLOWED_USER_IDS_RAW.strip():
 
 MAX_USERNAMES_PER_REQUEST = int(os.environ.get("MAX_USERNAMES", "5"))
 MAX_USERNAME_LENGTH = int(os.environ.get("MAX_USERNAME_LENGTH", "64"))
-
-# Sherlock data URL
-MANIFEST_URL = "https://raw.githubusercontent.com/sherlock-project/sherlock/master/sherlock_project/resources/data.json"
 
 # Logging
 logging.basicConfig(
@@ -195,20 +191,18 @@ def split_message(text: str, max_length: int = 4096) -> list[str]:
 def get_sherlock_sites() -> dict:
     """
     Get Sherlock sites data as raw dict (what sherlock() function expects).
-    Downloads fresh data from GitHub.
+    
+    This mimics exactly what main() does in sherlock.py:
+        site_data_all = {site.name: site.information for site in sites}
     """
-    try:
-        response = requests.get(url=MANIFEST_URL, timeout=30)
-        if response.status_code == 200:
-            site_data = response.json()
-            site_data.pop('$schema', None)
-            logger.info(f"Loaded {len(site_data)} sites from manifest")
-            return site_data
-        else:
-            raise RuntimeError(f"HTTP {response.status_code} from manifest URL")
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch sites from URL: {e}")
-        raise RuntimeError(f"Could not load Sherlock sites data: {e}")
+    # Create SitesInformation object (downloads fresh data from GitHub)
+    sites = SitesInformation()
+    
+    # Convert to the format sherlock() expects: {site_name: site_info_dict}
+    site_data = {site.name: site.information for site in sites}
+    
+    logger.info(f"Loaded {len(site_data)} sites from Sherlock database")
+    return site_data
 
 
 async def run_sherlock_search(username: str):
@@ -216,7 +210,7 @@ async def run_sherlock_search(username: str):
     def _search():
         notifier = TelegramQueryNotify()
 
-        # Get raw site data (dict of dicts)
+        # Get site data in the format sherlock() expects
         site_data = get_sherlock_sites()
 
         # Run the search
@@ -224,8 +218,6 @@ async def run_sherlock_search(username: str):
             username=username,
             site_data=site_data,
             query_notify=notifier,
-            tor=False,
-            unique_tor=False,
             timeout=15,
         )
 

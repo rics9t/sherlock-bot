@@ -1,0 +1,16 @@
+# Core Sherlock dependencies
+certifi>=2019.6.16
+colorama>=0.4.1,<0.5.0
+PySocks>=1.7.0,<2.0.0
+requests>=2.22.0,<3.0.0
+requests-futures>=1.0.0,<2.0.0
+stem>=1.8.0,<2.0.0
+pandas>=2.2.1,<3.0.0
+openpyxl>=3.0.10,<4.0.0
+tomli>=2.2.1,<3.0.0
+
+# Telegram Bot
+python-telegram-bot[all]>=21.0,<22.0.0
+
+# Sherlock itself
+sherlock-project>=0.15.0

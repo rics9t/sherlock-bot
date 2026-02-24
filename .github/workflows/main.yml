@@ -13,4 +13,19 @@ jobs:
       - name: Push to HF
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://Rics9t:$HF_TOKEN@huggingface.co/spaces/Rics9t/Sherlock master:main
+        run: |
+          # 1. Удаляем все проблемные файлы физически
+          rm -rf docs/images/ images/ screenshot/
+          find . -name "*.png" -type f -delete
+          find . -name "*.gif" -type f -delete
+          find . -name "*.swp" -type f -delete
+          
+          # 2. Фиксируем изменения локально (внутри виртуальной машины Action)
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .
+          git commit -m "Cleanup binary files for HF Space" || echo "No changes to commit"
+          
+          # 3. Пушим чистый код в ветку main на HF
+          git push --force https://Rics9t:$HF_TOKEN@huggingface.co/spaces/Rics9t/Sherlock master:main
+
